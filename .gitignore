@@ -4,3 +4,7 @@ logging
 data
 .DS_Store
 *.pyc
+archive
+baselines
+checkpoints
+results
