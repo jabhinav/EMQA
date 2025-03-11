@@ -1,1 +1,6 @@
 hf_key.txt
+run_ftransfer.sh
+logging
+data
+.DS_Store
+*.pyc
