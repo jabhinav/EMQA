@@ -7,7 +7,11 @@ from utils.custom import is_rank_0
 from tqdm import tqdm
 
 from huggingface_hub import login
-login(token='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')
+# Read the hf_token from the file
+path_to_file = './hf_key.txt'
+with open(path_to_file, 'r') as file:
+	hf_token = file.read().replace('\n', '')
+login(token=hf_token)
 
 
 def read_annotations_file(annotations_path):
