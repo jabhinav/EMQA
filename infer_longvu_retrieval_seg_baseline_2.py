@@ -96,7 +96,7 @@ def normalize(data):
 	return (data / 255.0 - v_mean) / v_std
 
 
-def get_video_embeddings(videoclip_xl, batch_segments, fnum=8, gpu_idx=None) -> List[torch.Tensor]:
+def get_video_embeddings(videoclip_xl, batch_segments, fnum=8, gpu_idx=0) -> List[torch.Tensor]:
 	def preprocess(segment):
 		frames = [segment[i] for i in range(len(segment))]
 		step = len(frames) // fnum
@@ -116,19 +116,17 @@ def get_video_embeddings(videoclip_xl, batch_segments, fnum=8, gpu_idx=None) -> 
 	
 	video_inputs = [preprocess(segment) for segment in batch_segments]
 	video_inputs = torch.cat(video_inputs, dim=0).float()
-	if gpu_idx is not None:
-		video_inputs = video_inputs.cuda(gpu_idx)
+	video_inputs = video_inputs.cuda(gpu_idx)
 	with torch.no_grad():
 		video_embeds = videoclip_xl.vision_model.get_vid_features(video_inputs).float()
 		video_embeds = [video_embeds[i]/_get_vector_norm(video_embeds[i]) for i in range(len(video_embeds))]
 	return video_embeds
 
 
-def get_text_embeddings(videoclip_xl, text_encoder, text, gpu_idx=None):
+def get_text_embeddings(videoclip_xl, text_encoder, text, gpu_idx=0):
 	with torch.no_grad():
 		text_inputs = text_encoder.tokenize(text, truncate=True)
-		if gpu_idx is not None:
-			text_inputs = text_inputs.cuda(gpu_idx)
+		text_inputs = text_inputs.cuda(gpu_idx)
 		text_embeds = videoclip_xl.text_model.encode_text(text_inputs)
 		text_embeds /= _get_vector_norm(text_embeds)
 	return text_embeds
@@ -142,20 +140,24 @@ def predict(args, annotations: dict) -> None:
 	model_path = args.model_path
 	# torch.distributed.barrier()
 	tokenizer, model, image_processor, context_len = load_pretrained_model(
-		model_path,  # pyre-fixme
-		None,
-		model_name,
+		model_path=model_path,  # pyre-fixme
+		model_base=None,
+		model_name=model_name,
 		device_map=None,
 	)
 	model.get_model().config.drop_threshold = 0.8
 	model.config.use_cache = True
-	model.cuda()
+	# Either manually set the device or specify the device arg in load_pretrained_model.
+	# Its default is 'cuda'. For custom, set it to 'cuda:args.gpu_idx_qa'
+	model.cuda(args.gpu_idx_qa)
+	for vision_tower_aux in model.get_vision_tower_aux_list():
+		vision_tower_aux.cuda(args.gpu_idx_qa)
 	print("[INFO] Model Loaded Successfully")
 	
 	# Load the embedding/retrieval model
 	ret_model = load_videoclip_model(args.retrieval_model_path)
-	if args.gpu_idx is not None:
-		ret_model.cuda(args.gpu_idx).eval()  # Set the model to evaluation mode
+	if args.gpu_idx_ret is not None:
+		ret_model.cuda(args.gpu_idx_ret).eval()  # Set the model to evaluation mode
 	else:
 		ret_model.eval()
 	print("[INFO] Retrieval Model Loaded Successfully")
@@ -218,7 +220,7 @@ def predict(args, annotations: dict) -> None:
 		for i in tqdm(range(0, len(segments), args.fwd_batch_size_retrieval), desc="Extracting Segment Embeddings", total=math.ceil(len(segments)/args.fwd_batch_size_retrieval)):
 			batch_segments = segments[i:i + args.fwd_batch_size_retrieval]
 			batch_segments = [vr.get_batch(seg).asnumpy() for seg in batch_segments]
-			batch_embeddings = get_video_embeddings(ret_model, batch_segments, fnum=args.n_frames, gpu_idx=args.gpu_idx)
+			batch_embeddings = get_video_embeddings(ret_model, batch_segments, fnum=args.n_frames, gpu_idx=args.gpu_idx_ret)
 			segment_embeddings.extend(batch_embeddings)
 		
 		for qa_sample in annotations[video_id]:
@@ -226,7 +228,7 @@ def predict(args, annotations: dict) -> None:
 			print(f"Processing: {_id}")
 			
 			# Get text embeddings
-			ques_embed = get_text_embeddings(ret_model, text_encoder, ques, gpu_idx=args.gpu_idx)
+			ques_embed = get_text_embeddings(ret_model, text_encoder, ques, gpu_idx=args.gpu_idx_ret)
 			
 			# Calculate similarity between the segment and text embeddings
 			similarity_scores = []
@@ -248,7 +250,7 @@ def predict(args, annotations: dict) -> None:
 			# Use the top-k segment's frames to get the video
 			video = vr.get_batch(top_k_segments_frames).asnumpy()  # Expensive step
 			image_sizes = [video[0].shape[:2]]
-			video = process_images(video, image_processor, model.config)
+			video = process_images(video, image_processor, model.config, args.gpu_idx_qa)
 			video = [item.unsqueeze(0) for item in video]
 			print("[INFO] Frames Processed Successfully")
 			
@@ -274,15 +276,19 @@ def predict(args, annotations: dict) -> None:
 					prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
 				)
 				.unsqueeze(0)
-				.cuda()
+				.cuda(args.gpu_idx_qa)
 			)
-			
+
 			if "llama3" in version:
 				input_ids = input_ids[0][1:].unsqueeze(0)  # remove bos
 			
 			stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
 			keywords = [stop_str]
 			stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+			
+			# # [Debug] Print the cuda device of the input_ids and video
+			# print(f"[DEBUG] input_ids.device: {input_ids.device}")
+			# print(f"[DEBUG] video.device: {[v.device for v in video]}")
 			
 			with torch.inference_mode():
 				output_ids = model.generate(
@@ -368,7 +374,8 @@ if __name__ == "__main__":
 	parser.add_argument('--n_frames', type=int, default=8, help='Number of frames the video embedding model can handle. VideoCLIP-XL can handle 8 frames (not more, not less)')
 	
 	parser.add_argument('--fwd_batch_size_retrieval', type=int, default=4, help='Number of segments to process at once')
-	parser.add_argument('--gpu_idx', type=int, help='GPU ID', default=1)
+	parser.add_argument('--gpu_idx_qa', type=int, help='GPU ID', default=1)
+	parser.add_argument('--gpu_idx_ret', type=int, help='GPU ID', default=2)
 	parser.add_argument('--logging_dir', default=logging_dir)
 	parser.add_argument('--plot_dir', default=os.path.join(logging_dir, "plots"))
 	args = parser.parse_args()

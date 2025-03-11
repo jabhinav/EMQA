@@ -265,7 +265,14 @@ def expand2square(pil_img, background_color):
 
 # pyre-fixme[3]: Return type must be annotated.
 # pyre-fixme[2]: Parameter must be annotated.
-def process_images(images, image_processor, model_cfg):
+def process_images(images, image_processor, model_cfg, gpu_idx=0):
+    """
+    :param images:
+    :param image_processor:
+    :param model_cfg:
+    :param gpu_idx:
+    :return:
+    """
     if isinstance(image_processor, list):
         processor_aux_list = image_processor
         new_images_aux_list = []
@@ -292,7 +299,7 @@ def process_images(images, image_processor, model_cfg):
             list(batch_image_aux) for batch_image_aux in zip(*new_images_aux_list)
         ]
         new_images_aux_list = [
-            torch.stack(image_aux).half().cuda() for image_aux in new_images_aux_list
+            torch.stack(image_aux).half().cuda(gpu_idx) for image_aux in new_images_aux_list
         ]
         return new_images_aux_list
     else:
@@ -307,11 +314,13 @@ def process_images(images, image_processor, model_cfg):
                     "pixel_values"
                 ][0]
                 new_images.append(image)
+            if all(x.shape == new_images[0].shape for x in new_images):
+                new_images = torch.stack(new_images, dim=0).cuda(gpu_idx)
+            return new_images
         else:
-            return image_processor(images, return_tensors="pt")["pixel_values"]
-        if all(x.shape == new_images[0].shape for x in new_images):
-            new_images = torch.stack(new_images, dim=0)
-        return new_images
+            return image_processor(images, return_tensors="pt")["pixel_values"].cuda(gpu_idx)
+        
+        
 
 
 # pyre-fixme[2]: Parameter must be annotated.

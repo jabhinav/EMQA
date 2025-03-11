@@ -71,8 +71,9 @@ def load_retrieval_model(retrieval_model_path: str = "openai/clip-vit-large-patc
 	return model, processor
 
 
-def get_image_embeddings(model, processor, image):
+def get_image_embeddings(model, processor, image, gpu_idx=0):
 	image_processed = processor(images=image, return_tensors="pt")
+	image_processed = {k: v.cuda(gpu_idx) for k, v in image_processed.items()}
 	with torch.no_grad():
 		image_embeds = model.get_image_features(**image_processed)
 		# normalized features
@@ -80,8 +81,9 @@ def get_image_embeddings(model, processor, image):
 	return image_embeds
 
 
-def get_text_embeddings(model, processor, text):
+def get_text_embeddings(model, processor, text, gpu_idx=0):
 	text_processed = processor(text=text, return_tensors="pt", padding=True)
+	text_processed = {k: v.cuda(gpu_idx) for k, v in text_processed.items()}
 	with torch.no_grad():
 		text_embeds = model.get_text_features(**text_processed)
 		# normalized features
@@ -104,12 +106,19 @@ def predict(args, annotations: dict) -> None:
 	)
 	model.get_model().config.drop_threshold = 0.8
 	model.config.use_cache = True
-	model.cuda()
+	# Either manually set the device or specify the device arg in load_pretrained_model.
+	# Its default is 'cuda'. For custom, set it to 'cuda:args.gpu_idx_qa'
+	model.cuda(args.gpu_idx_qa)
+	for vision_tower_aux in model.get_vision_tower_aux_list():
+		vision_tower_aux.cuda(args.gpu_idx_qa)
 	print("[INFO] Model Loaded Successfully")
 	
 	# Load the embedding/retrieval model
 	ret_model, ret_processor = load_retrieval_model(args.retrieval_model_path)
-	print("[INFO] Retrieval Model Loaded Successfully")
+	if args.gpu_idx_ret is not None:
+		ret_model.cuda(args.gpu_idx_ret).eval()  # Set the model to evaluation mode
+	else:
+		ret_model.eval()
 	
 	results = {}
 	for video_id in annotations:
@@ -146,7 +155,7 @@ def predict(args, annotations: dict) -> None:
 		frame_embeddings = []
 		for frame_idx in tqdm(selected_frames, desc="Extracting Frame Embeddings", total=len(selected_frames)):
 			frame = vr.get_batch([frame_idx]).asnumpy()  # Expensive step
-			frame_embed = get_image_embeddings(ret_model, ret_processor, frame)
+			frame_embed = get_image_embeddings(ret_model, ret_processor, frame, gpu_idx=args.gpu_idx_ret)
 			frame_embeddings.append(frame_embed)
 
 		for qa_sample in annotations[video_id]:
@@ -154,7 +163,7 @@ def predict(args, annotations: dict) -> None:
 			print(f"Processing: {_id}")
 
 			# Get text embeddings
-			ques_embed = get_text_embeddings(ret_model, ret_processor, ques)
+			ques_embed = get_text_embeddings(ret_model, ret_processor, ques, gpu_idx=args.gpu_idx_ret)
 
 			# Calculate similarity between the frame and text embeddings
 			similarity_scores = []
@@ -170,7 +179,7 @@ def predict(args, annotations: dict) -> None:
 			# Use the top-k frames to get the video
 			video = vr.get_batch(top_k_frames).asnumpy()  # Expensive step
 			image_sizes = [video[0].shape[:2]]
-			video = process_images(video, image_processor, model.config)
+			video = process_images(video, image_processor, model.config, args.gpu_idx_qa)
 			video = [item.unsqueeze(0) for item in video]
 			print("[INFO] Frames Processed Successfully")
 
@@ -196,7 +205,7 @@ def predict(args, annotations: dict) -> None:
 					prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
 				)
 				.unsqueeze(0)
-				.cuda()
+				.cuda(args.gpu_idx_qa)
 			)
 
 			if "llama3" in version:
@@ -279,6 +288,9 @@ if __name__ == "__main__":
 	parser.add_argument('--video_ext', default=".mp4")
 	parser.add_argument('--max_frame_limit', type=int, default=500)
 	parser.add_argument('--top_k', type=int, default=10)
+	
+	parser.add_argument('--gpu_idx_qa', type=int, help='GPU ID', default=1)
+	parser.add_argument('--gpu_idx_ret', type=int, help='GPU ID', default=2)
 	
 	args = parser.parse_args()
 	
