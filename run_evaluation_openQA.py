@@ -10,7 +10,7 @@ from huggingface_hub import login
 # Read the hf_token from the file
 path_to_file = './hf_key.txt'
 with open(path_to_file, 'r') as file:
-	hf_token = file.read().replace('\n', '')
+	hf_token = file.read().replace('\n', '').strip()
 login(token=hf_token)
 
 

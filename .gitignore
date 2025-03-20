@@ -8,3 +8,5 @@ archive
 baselines
 checkpoints
 results
+.idea
+llama-models

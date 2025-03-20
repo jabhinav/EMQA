@@ -3,11 +3,13 @@
 
 import json
 import matplotlib.pyplot as plt
-
+import numpy as np
+import seaborn as sns
 
 # Provide the path to segment predictions
-path_to_preds = ('./results/longvu_cambrian_llama3_baseline_top1_segment_middleRepFrame_10m_10n_retrieval'
-				 '/results_cambrian_llama3_baseline_top1_segment_middleRepFrame_10m_10n_retrieval.json')
+# path_to_preds = './results/longvu_cambrian_llama3_baseline_top1_segment_middleRepFrame_10m_10n_retrieval//results_cambrian_llama3_baseline_top1_segment_middleRepFrame_10m_10n_retrieval.json'
+# path_to_preds = './results/longvu_cambrian_llama3_baseline_top1_segment_VideoCLIP-XL_10m_10n_retrieval/results_cambrian_llama3_baseline_top1_segment_VideoCLIP-XL_10m_10n_retrieval.json'
+path_to_preds = './results/longvu_cambrian_llama3_baseline_top1_segment_VideoCLIP-XL-v2_10m_10n_retrieval/results_cambrian_llama3_baseline_top1_segment_VideoCLIP-XL-v2_10m_10n_retrieval.json'
 with open(path_to_preds) as f:
 	preds = json.load(f)
 
@@ -58,16 +60,20 @@ for video_id in preds:
 					# Convert distance to seconds
 					dist /= fps
 					distances.append(dist)
-					question_wise_distances[ques_starts_with].append(dist) if ques_starts_with in question_wise_distances else \
+					question_wise_distances[ques_starts_with].append(
+						dist) if ques_starts_with in question_wise_distances else \
 						question_wise_distances['other'].append(dist)
-					
-					
 
-print("Average Distance in Seconds: ", sum(distances) / len(distances))
+print("Number of samples with GT Frames: ", len(distances))
+print("Average Distance in Seconds: ", np.mean(distances))
+print("Std Deviation: ", np.std(distances))
 
-import seaborn as sns
+bins = range(0, 3000, 60)
+x_ticks = np.arange(0, 3000, 500)  # For showing x-ticks
 sns.set_theme(style="whitegrid")
-sns.histplot(distances, bins=range(0, 3000, 60), edgecolor='black')  #
+sns.histplot(np.clip(distances, bins[0], bins[-1]), bins=bins, edgecolor='black')
+# Add a special x-tick for end bin with '3000+'
+plt.xticks(list(x_ticks) + [3000], [str(b) for b in x_ticks] + ['3000+'])
 plt.xlabel('Distance in Seconds')
 plt.ylabel('Frequency')
 plt.title('Distribution of Distance of Predicted Segment from GT Frames')
@@ -78,7 +84,8 @@ fig, axs = plt.subplots(3, 2, figsize=(15, 15))
 fig.suptitle('Question-wise Distribution of Distance of Predicted Segment from GT Frames')
 for i, (ques_type, dist) in enumerate(question_wise_distances.items()):
 	ax = axs[i // 2, i % 2]
-	sns.histplot(dist, bins=range(0, 3000, 60), edgecolor='black', ax=ax)
+	sns.histplot(np.clip(dist, bins[0], bins[-1]), bins=bins, edgecolor='black', ax=ax)
+	ax.set_xticks(list(x_ticks) + [3000], [str(b) for b in x_ticks] + ['3000+'])
 	ax.set_title(f'{ques_type.capitalize()}')
 	ax.set_ylabel('Frequency')
 	# Only set x-axis label for the last row
