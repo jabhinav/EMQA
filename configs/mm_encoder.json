@@ -1,0 +1,23 @@
+{
+  "image_aspect_ratio": "pad",
+  "mm_vision_select_feature": "patch",
+  "mm_vision_select_layer": -2,
+  "list_mm_vis_towers": [
+    "siglip/CLIP-ViT-SO400M-14-384",
+    "facebook/dinov2-giant-res378"
+  ],
+  "list_mm_vis_towers_token_len": [
+    576,
+    576
+  ],
+  "image_position": 91,
+  "image_token_len": 144,
+  "inference_max_length": 16,
+  "query_num_list": [
+    144
+  ],
+  "fm_type": "gpt-neo-125M",
+  "load_base_from_path": "",
+  "load_adapter_from": "",
+  "num_virtual_tokens": 10
+}
